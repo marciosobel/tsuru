@@ -21,7 +21,6 @@ import (
 	"sync"
 	"text/template"
 
-	uuid "github.com/nu7hatch/gouuid"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tsuru/config"
@@ -42,6 +41,7 @@ import (
 	"github.com/tsuru/tsuru/service"
 	"github.com/tsuru/tsuru/servicemanager"
 	"github.com/tsuru/tsuru/set"
+	"github.com/tsuru/tsuru/streamfmt"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	imgTypes "github.com/tsuru/tsuru/types/app/image"
 	authTypes "github.com/tsuru/tsuru/types/auth"
@@ -346,7 +346,9 @@ func CreateApp(ctx context.Context, app *appTypes.App, user *auth.User) error {
 		&insertApp,
 		&exportEnvironmentsAction,
 		&provisionApp,
+		&bootstrapDeployApp,
 	}
+
 	pipeline := action.NewPipeline(actions...)
 	err = pipeline.Execute(ctx, app, user)
 	if err != nil {
@@ -709,14 +711,14 @@ func unbindVolumes(ctx context.Context, app *appTypes.App) error {
 func Delete(ctx context.Context, app *appTypes.App, evt *event.Event, requestID string) error {
 	w := evt
 	appName := app.Name
-	fmt.Fprintf(w, "---- Removing application %q...\n", appName)
+	streamfmt.FprintlnSectionf(w, "Removing application %q...", appName)
 	var hasErrors bool
 	defer func() {
 		var problems string
 		if hasErrors {
 			problems = " Some errors occurred during removal."
 		}
-		fmt.Fprintf(w, "---- Done removing application.%s\n", problems)
+		streamfmt.FprintlnSectionf(w, "Done removing application.%s", problems)
 	}()
 	logErr := func(msg string, err error) {
 		msg = fmt.Sprintf("%s: %s", msg, err)
@@ -796,15 +798,15 @@ func Delete(ctx context.Context, app *appTypes.App, evt *event.Event, requestID 
 // DeleteVersion deletes an app version.
 func DeleteVersion(ctx context.Context, app *appTypes.App, w io.Writer, versionStr string) error {
 	w = withLogWriter(app, w)
-	msg := fmt.Sprintf("\n ---> Deleting version %s of app %s", versionStr, app.Name)
-	fmt.Fprintf(w, "%s\n", msg)
+	msg := "\n" + streamfmt.Actionf("Deleting version %s of app %s", versionStr, app.Name)
+	fmt.Fprintln(w, msg)
 	var hasErrors bool
 	defer func() {
 		var problems string
 		if hasErrors {
 			problems = " Some errors occurred during removal."
 		}
-		fmt.Fprintf(w, "---- Done removing application version %s.%s\n", versionStr, problems)
+		streamfmt.FprintlnSectionf(w, "Done removing application version %s.%s", versionStr, problems)
 	}()
 
 	logErr := func(msg string, err error) {
@@ -996,12 +998,6 @@ func Revoke(ctx context.Context, app *appTypes.App, team *authTypes.Team) error 
 		return err
 	}
 	return nil
-}
-
-// GetTeams returns a slice of teams that have access to the app.
-func GetTeams(ctx context.Context, app *appTypes.App) []authTypes.Team {
-	t, _ := servicemanager.Team.FindByNames(ctx, app.Teams)
-	return t
 }
 
 func SetPool(ctx context.Context, app *appTypes.App) error {
@@ -1264,9 +1260,9 @@ func run(ctx context.Context, app *appTypes.App, cmd string, w io.Writer, args p
 // Restart runs the restart hook for the app, writing its output to w.
 func Restart(ctx context.Context, app *appTypes.App, process, versionStr string, w io.Writer) error {
 	w = withLogWriter(app, w)
-	msg := fmt.Sprintf("---- Restarting process %q ----", process)
+	msg := streamfmt.Sectionf("Restarting process %q", process)
 	if process == "" {
-		msg = fmt.Sprintf("---- Restarting the app %q ----", app.Name)
+		msg = streamfmt.Sectionf("Restarting the app %q", app.Name)
 	}
 	fmt.Fprintf(w, "%s\n", msg)
 	prov, err := getProvisioner(ctx, app)
@@ -1367,11 +1363,11 @@ func updatePastUnits(ctx context.Context, app *appTypes.App, version appTypes.Ap
 
 func Stop(ctx context.Context, app *appTypes.App, w io.Writer, process, versionStr string) error {
 	w = withLogWriter(app, w)
-	msg := fmt.Sprintf("\n ---> Stopping the process %q", process)
+	msg := "\n" + streamfmt.Actionf("Stopping the process %q", process)
 	if process == "" {
-		msg = fmt.Sprintf("\n ---> Stopping the app %q", app.Name)
+		msg = "\n" + streamfmt.Actionf("Stopping the app %q", app.Name)
 	}
-	fmt.Fprintf(w, "%s\n", msg)
+	fmt.Fprintln(w, msg)
 	prov, err := getProvisioner(ctx, app)
 	if err != nil {
 		return err
@@ -1392,26 +1388,6 @@ func Stop(ctx context.Context, app *appTypes.App, w io.Writer, process, versionS
 		return err
 	}
 	return nil
-}
-
-func EnsureUUID(ctx context.Context, app *appTypes.App) (string, error) {
-	if app.UUID != "" {
-		return app.UUID, nil
-	}
-	uuidV4, err := uuid.NewV4()
-	if err != nil {
-		return "", errors.WithMessage(err, "failed to generate uuid v4")
-	}
-	collection, err := storagev2.AppsCollection()
-	if err != nil {
-		return "", err
-	}
-	_, err = collection.UpdateOne(ctx, mongoBSON.M{"name": app.Name}, mongoBSON.M{"$set": mongoBSON.M{"uuid": uuidV4.String()}})
-	if err != nil {
-		return "", err
-	}
-	app.UUID = uuidV4.String()
-	return app.UUID, nil
 }
 
 func GetAddresses(ctx context.Context, app *appTypes.App) ([]string, error) {
@@ -1489,12 +1465,12 @@ func SetEnvs(ctx context.Context, app *appTypes.App, setEnvs bindTypes.SetEnvArg
 	}
 
 	if setEnvs.Writer != nil && len(setEnvs.Envs) > 0 {
-		fmt.Fprintf(setEnvs.Writer, "---- Setting %d new environment variables ----\n", len(setEnvs.Envs))
+		streamfmt.FprintlnSectionf(setEnvs.Writer, "Setting %d new environment variables", len(setEnvs.Envs))
 	}
 
 	err := validateEnvConflicts(app, envNames)
 	if err != nil {
-		fmt.Fprintf(setEnvs.Writer, "---- environment variables have conflicts with service binds: %s ----\n", err.Error())
+		streamfmt.FprintlnSectionf(setEnvs.Writer, "environment variables have conflicts with service binds: %s", err.Error())
 		return err
 	}
 
@@ -1504,7 +1480,7 @@ func SetEnvs(ctx context.Context, app *appTypes.App, setEnvs bindTypes.SetEnvArg
 			// only prune variables managed by requested
 			if !ok && value.ManagedBy == setEnvs.ManagedBy {
 				if setEnvs.Writer != nil {
-					fmt.Fprintf(setEnvs.Writer, "---- Pruning %s from environment variables ----\n", name)
+					streamfmt.FprintlnSectionf(setEnvs.Writer, "Pruning %s from environment variables", name)
 				}
 				delete(app.Env, name)
 			}
@@ -1556,7 +1532,7 @@ func UnsetEnvs(ctx context.Context, app *appTypes.App, unsetEnvs bindTypes.Unset
 		return nil
 	}
 	if unsetEnvs.Writer != nil {
-		fmt.Fprintf(unsetEnvs.Writer, "---- Unsetting %d environment variables ----\n", len(unsetEnvs.VariableNames))
+		streamfmt.FprintlnSectionf(unsetEnvs.Writer, "Unsetting %d environment variables", len(unsetEnvs.VariableNames))
 	}
 	for _, name := range unsetEnvs.VariableNames {
 		delete(app.Env, name)
@@ -1646,7 +1622,7 @@ func AddInstance(ctx context.Context, app *appTypes.App, addArgs bindTypes.AddIn
 		return nil
 	}
 	if addArgs.Writer != nil {
-		fmt.Fprintf(addArgs.Writer, "---- Setting %d new environment variables ----\n", len(addArgs.Envs)+1)
+		streamfmt.FprintlnSectionf(addArgs.Writer, "Setting %d new environment variables", len(addArgs.Envs)+1)
 	}
 	app.ServiceEnvs = append(app.ServiceEnvs, addArgs.Envs...)
 	collection, err := storagev2.AppsCollection()
@@ -1677,7 +1653,7 @@ func RemoveInstance(ctx context.Context, app *appTypes.App, removeArgs bindTypes
 		return nil
 	}
 	if removeArgs.Writer != nil {
-		fmt.Fprintf(removeArgs.Writer, "---- Unsetting %d environment variables ----\n", toUnset)
+		streamfmt.FprintlnSectionf(removeArgs.Writer, "Unsetting %d environment variables", toUnset)
 	}
 	collection, err := storagev2.AppsCollection()
 	if err != nil {
@@ -1974,11 +1950,11 @@ func hasMultipleVersions(ctx context.Context, app *appTypes.App) (bool, error) {
 // changing the units state to StatusStarted.
 func Start(ctx context.Context, app *appTypes.App, w io.Writer, process, versionStr string) error {
 	w = withLogWriter(app, w)
-	msg := fmt.Sprintf("\n ---> Starting the process %q", process)
+	msg := "\n" + streamfmt.Actionf("Starting the process %q", process)
 	if process == "" {
-		msg = fmt.Sprintf("\n ---> Starting the app %q", app.Name)
+		msg = "\n" + streamfmt.Actionf("Starting the app %q", app.Name)
 	}
-	fmt.Fprintf(w, "%s\n", msg)
+	fmt.Fprintln(w, msg)
 	prov, err := getProvisioner(ctx, app)
 	if err != nil {
 		return err
@@ -2364,14 +2340,6 @@ func GetCertificates(ctx context.Context, app *appTypes.App) (*appTypes.Certific
 	return certificateSet, nil
 }
 
-func RoutableAddresses(ctx context.Context, app *appTypes.App) ([]appTypes.RoutableAddresses, error) {
-	prov, err := getProvisioner(ctx, app)
-	if err != nil {
-		return nil, err
-	}
-	return prov.RoutableAddresses(ctx, app)
-}
-
 func withLogWriter(app *appTypes.App, w io.Writer) io.Writer {
 	logWriter := &LogWriter{AppName: app.Name}
 	if w != nil {
@@ -2604,6 +2572,19 @@ func RemoveAutoScale(ctx context.Context, app *appTypes.App, process string) err
 		return errors.Errorf("provisioner %q does not support native autoscaling", prov.GetName())
 	}
 	return autoscaleProv.RemoveAutoScale(ctx, app, process)
+}
+
+func SwapAutoScale(ctx context.Context, app *appTypes.App, versionStr string) error {
+	prov, err := getProvisioner(ctx, app)
+	if err != nil {
+		return err
+	}
+	autoscaleProv, ok := prov.(provision.AutoScaleProvisioner)
+	if !ok {
+		return errors.Errorf("provisioner %q does not support native autoscaling", prov.GetName())
+	}
+
+	return autoscaleProv.SwapAutoScale(ctx, app, versionStr)
 }
 
 func envInSet(envName string, envs []bindTypes.EnvVar) bool {

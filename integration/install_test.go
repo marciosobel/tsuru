@@ -44,6 +44,7 @@ var (
 		jobList(),
 		exampleApps(),
 		unitAddRemove(),
+		deployWithAutoscale(),
 		testCases(),
 		testApps(),
 		updateAppPools(),
@@ -54,6 +55,8 @@ var (
 		appVersions(),
 		multiversionRollbackTest(),
 		multiversionRollbackOverrideTest(),
+		multiversionRoutableStopStartTest(),
+		swapAutoScaleTest(),
 	}
 )
 
@@ -188,15 +191,10 @@ func exampleApps() ExecFlow {
 		appName := fmt.Sprintf("%s-%s-iapp", env.Get("plat"), env.Get("pool"))
 		res := T("app", "create", appName, "{{.plat}}", "-t", "{{.team}}", "-o", "{{.pool}}").Run(env)
 		c.Assert(res, ResultOk)
-		res = T("app", "info", "-a", appName).Run(env)
-		c.Assert(res, ResultOk)
-		platRE := regexp.MustCompile(`(?s)Platform: (.*?)\n`)
-		parts := platRE.FindStringSubmatch(res.Stdout.String())
-		c.Assert(parts, check.HasLen, 2)
-		lang := strings.ReplaceAll(parts[1], "-iplat", "")
+		appInfo := getAppInfo(c, appName, env)
+		lang := strings.ReplaceAll(appInfo.Platform, "-iplat", "")
 		res = T("app", "deploy", "-a", appName, ".").WithPWD(env.Get("examplesdir") + "/" + lang).Run(env)
 		c.Assert(res, ResultOk)
-		appInfo := new(appTypes.AppInfo)
 		ok := retry(5*time.Minute, func() (ready bool) {
 			appInfo, ready = checkAppExternallyAddressable(c, appName, env)
 			return ready
@@ -263,27 +261,68 @@ func unitAddRemove() ExecFlow {
 		res := T("unit", "add", "-a", appName, "2").Run(env)
 		c.Assert(res, ResultOk)
 
-		countReadyUnits := func() int {
-			appInfo, _ := checkAppReady(c, appName, env)
-			count := 0
-			for _, unit := range appInfo.Units {
-				if unit.Ready != nil && *unit.Ready {
-					count++
-				}
-			}
-			return count
-		}
-
 		ok := retry(5*time.Minute, func() bool {
-			return countReadyUnits() == 3
+			_, ok := checkReadyUnits(c, appName, env, 3)
+			return ok
 		})
 		c.Assert(ok, check.Equals, true, check.Commentf("new units not ready after 5 minutes: %v", res))
 		res = T("unit", "remove", "-a", appName, "2").Run(env)
 		c.Assert(res, ResultOk)
 		ok = retry(5*time.Minute, func() bool {
-			return countReadyUnits() == 1
+			_, ok := checkReadyUnits(c, appName, env, 1)
+			return ok
 		})
 		c.Assert(ok, check.Equals, true, check.Commentf("new units not removed after 5 minutes: %v", res))
+	}
+	return flow
+}
+
+func deployWithAutoscale() ExecFlow {
+	flow := ExecFlow{
+		matrix: map[string]string{
+			"pool": "poolnames",
+		},
+		requires: []string{"team", "poolnames"},
+	}
+	flow.forward = func(c *check.C, env *Environment) {
+		cwd, err := os.Getwd()
+		c.Assert(err, check.IsNil)
+
+		appDir := path.Join(cwd, "fixtures", "multiversion-python-app")
+		appName := slugifyName(fmt.Sprintf("deploy-with-autoscale-%s", env.Get("pool")))
+
+		res := T("app", "create", appName, "python-iplat", "-o", "{{.pool}}", "-t", "{{.team}}").Run(env)
+		c.Assert(res, ResultOk)
+
+		imageToHash := make(map[string]string)
+		deployAndMapHash(c, appDir, appName, []string{}, imageToHash, env)
+
+		res = T("autoscale", "set", "-a", appName, "--cpu", "30", "--min", "3", "--max", "10").Run(env)
+		c.Assert(res, ResultOk)
+		ok := retry(5*time.Minute, func() bool {
+			_, ok := checkReadyUnits(c, appName, env, 3)
+			return ok
+		})
+		c.Assert(ok, check.Equals, true, check.Commentf("new units not ready after 5 minutes: %v", res))
+
+		deployAndMapHash(c, appDir, appName, []string{}, imageToHash, env)
+
+		appInfo := new(appTypes.AppInfo)
+		ok = retry(5*time.Minute, func() (ready bool) {
+			appInfo, ready = checkAppExternallyAddressable(c, appName, env)
+			return ready
+		})
+		c.Assert(ok, check.Equals, true, check.Commentf("app not ready after 5 minutes: %v", res))
+		externalAddress := appInfo.Routers[0].Addresses[0]
+		cmd := NewCommand("curl", "-sSf", "http://"+externalAddress)
+		ok = retry(15*time.Minute, func() bool {
+			res = cmd.Run(env)
+			return res.ExitCode == 0
+		})
+		c.Assert(ok, check.Equals, true, check.Commentf("invalid result: %v", res))
+
+		res = T("autoscale", "unset", "-a", appName).Run(env)
+		c.Assert(res, ResultOk)
 	}
 	return flow
 }
@@ -386,12 +425,12 @@ func appVersions() ExecFlow {
 		checkVersion("2")
 
 		time.Sleep(1 * time.Second)
-		res, ok := T("app", "router", "version", "add", "3", "-a", appName).Retry(time.Minute, env)
+		res, ok := T("app", "router", "version", "add", "3", "-a", appName).Retry(time.Minute, env, RetryOptions{})
 		c.Assert(res, ResultOk)
 		c.Assert(ok, check.Equals, true)
 		checkVersion("2", "3")
 		time.Sleep(1 * time.Second)
-		res, ok = T("app", "router", "version", "remove", "2", "-a", appName).Retry(time.Minute, env)
+		res, ok = T("app", "router", "version", "remove", "2", "-a", appName).Retry(time.Minute, env, RetryOptions{})
 		c.Assert(res, ResultOk)
 		c.Assert(ok, check.Equals, true)
 		checkVersion("3")
@@ -401,12 +440,12 @@ func appVersions() ExecFlow {
 		checkVersion("3")
 
 		time.Sleep(1 * time.Second)
-		res, ok = T("app", "router", "version", "add", "1", "-a", appName).Retry(time.Minute, env)
+		res, ok = T("app", "router", "version", "add", "1", "-a", appName).Retry(time.Minute, env, RetryOptions{})
 		c.Assert(res, ResultOk)
 		checkVersion("1", "3")
 		c.Assert(ok, check.Equals, true)
 		time.Sleep(1 * time.Second)
-		res, ok = T("app", "router", "version", "remove", "3", "-a", appName).Retry(time.Minute, env)
+		res, ok = T("app", "router", "version", "remove", "3", "-a", appName).Retry(time.Minute, env, RetryOptions{})
 		c.Assert(res, ResultOk)
 		c.Assert(ok, check.Equals, true)
 		checkVersion("1")

@@ -24,7 +24,6 @@ import (
 	"github.com/codegangsta/negroni"
 	"github.com/felixge/fgprof"
 	"github.com/fsnotify/fsnotify"
-	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tsuru/config"
@@ -57,6 +56,7 @@ import (
 	"github.com/tsuru/tsuru/tag"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	"github.com/tsuru/tsuru/volume"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/net/websocket"
 )
 
@@ -279,6 +279,7 @@ func RunServer(dry bool) http.Handler {
 	m.Add("1.0", http.MethodDelete, "/apps/{app}/units", AuthorizationRequiredHandler(removeUnits))
 	m.Add("1.9", http.MethodGet, "/apps/{app}/units/autoscale", AuthorizationRequiredHandler(autoScaleUnitsInfo))
 	m.Add("1.9", http.MethodPost, "/apps/{app}/units/autoscale", AuthorizationRequiredHandler(addAutoScaleUnits))
+	m.Add("1.29", http.MethodPost, "/apps/{app}/units/autoscale/swap", AuthorizationRequiredHandler(swapAutoScaleUnits))
 	m.Add("1.9", http.MethodDelete, "/apps/{app}/units/autoscale", AuthorizationRequiredHandler(removeAutoScaleUnits))
 	m.Add("1.12", http.MethodDelete, "/apps/{app}/units/{unit}", AuthorizationRequiredHandler(killUnit))
 	m.Add("1.0", http.MethodPut, "/apps/{app}/teams/{team}", AuthorizationRequiredHandler(grantAppAccess))
@@ -530,9 +531,9 @@ func appFinder(appName string) (*appTypes.App, error) {
 }
 
 func startServer(handler http.Handler) error {
-	span, ctx := opentracing.StartSpanFromContext(
-		context.Background(), "StartServer")
-	defer span.Finish()
+	tracer := otel.Tracer("tsuru/api")
+	ctx, span := tracer.Start(context.Background(), "StartServer")
+	defer span.End()
 
 	srvConf, err := createServers(handler)
 	if err != nil {

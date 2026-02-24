@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	fakekedaclientset "github.com/kedacore/keda/v2/pkg/generated/clientset/versioned/fake"
 	"github.com/stretchr/testify/require"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/app"
@@ -75,6 +76,7 @@ func (s *S) prepareMultiCluster(_ *check.C) (*kTesting.ClientWrapper, *kTesting.
 		MetricsClientset:       fakemetrics.NewSimpleClientset(),
 		VPAClientset:           fakevpa.NewSimpleClientset(),
 		BackendClientset:       fakeBackendConfig.NewSimpleClientset(),
+		KEDAClientForConfig:    fakekedaclientset.NewSimpleClientset(),
 		ClusterInterface:       clusterClient1,
 	}
 	clusterClient1.Interface = client1
@@ -95,6 +97,7 @@ func (s *S) prepareMultiCluster(_ *check.C) (*kTesting.ClientWrapper, *kTesting.
 		MetricsClientset:       fakemetrics.NewSimpleClientset(),
 		VPAClientset:           fakevpa.NewSimpleClientset(),
 		BackendClientset:       fakeBackendConfig.NewSimpleClientset(),
+		KEDAClientForConfig:    fakekedaclientset.NewSimpleClientset(),
 		ClusterInterface:       clusterClient2,
 	}
 	clusterClient2.Interface = client2
@@ -115,6 +118,7 @@ func (s *S) prepareMultiCluster(_ *check.C) (*kTesting.ClientWrapper, *kTesting.
 		MetricsClientset:       fakemetrics.NewSimpleClientset(),
 		VPAClientset:           fakevpa.NewSimpleClientset(),
 		BackendClientset:       fakeBackendConfig.NewSimpleClientset(),
+		KEDAClientForConfig:    fakekedaclientset.NewSimpleClientset(),
 		ClusterInterface:       clusterClient2,
 	}
 	clusterClient3.Interface = client3
@@ -742,6 +746,38 @@ func (s *S) TestRestart(c *check.C) {
 	require.NoError(s.t, err)
 	require.Len(s.t, units, 1)
 	require.NotEqual(s.t, id, units[0].ID)
+}
+
+func (s *S) TestShouldRestartOnlyOnce(c *check.C) {
+	a, wait, rollback := s.mock.DefaultReactions(c)
+	defer rollback()
+
+	var updateCount int32
+	s.client.PrependReactor("update", "deployments", func(action ktesting.Action) (bool, runtime.Object, error) {
+		atomic.AddInt32(&updateCount, 1)
+		return false, nil, nil
+	})
+
+	version := newSuccessfulVersion(c, a, map[string][]string{
+		"web": {"python", "myapp.py"},
+	})
+	err := s.p.AddUnits(context.TODO(), a, 3, "web", version, nil)
+	require.NoError(s.t, err)
+	wait()
+	units, err := s.p.Units(context.TODO(), a)
+	require.NoError(s.t, err)
+	require.Len(s.t, units, 3)
+
+	atomic.StoreInt32(&updateCount, 0)
+
+	err = s.p.Restart(context.TODO(), a, "", nil, nil)
+	require.NoError(s.t, err)
+	wait()
+
+	require.Equal(s.t, int32(1), atomic.LoadInt32(&updateCount))
+	units, err = s.p.Units(context.TODO(), a)
+	require.NoError(s.t, err)
+	require.Len(s.t, units, 3)
 }
 
 func (s *S) TestRestartNotProvisionedRecreateAppCRD(c *check.C) {
@@ -1860,7 +1896,7 @@ func (s *S) TestProvisionerUpdateApp(c *check.C) {
 	require.NoError(s.t, err)
 	err = s.p.UpdateApp(context.TODO(), a, newApp, buf)
 	require.NoError(s.t, err)
-	require.Contains(s.t, buf.String(), "Done updating units")
+	require.Contains(s.t, buf.String(), "All units ready")
 	require.True(s.t, recreatedPods)
 	appList, err := s.client.TsuruV1().Apps("tsuru").List(context.TODO(), metav1.ListOptions{})
 	require.NoError(s.t, err)

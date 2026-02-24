@@ -643,20 +643,6 @@ func NewInternal(ctx context.Context, opts *Opts) (*Event, error) {
 	return newEvt(ctx, opts)
 }
 
-func NewInternalMany(ctx context.Context, targets []eventTypes.Target, opts *Opts) (*Event, error) {
-	if len(targets) == 0 {
-		return nil, errors.New("event must have at least one target")
-	}
-	opts.Target = targets[0]
-	for _, target := range targets[1:] {
-		opts.ExtraTargets = append(opts.ExtraTargets, eventTypes.ExtraTarget{
-			Target: target,
-			Lock:   true,
-		})
-	}
-	return NewInternal(ctx, opts)
-}
-
 func makeBSONRaw(in interface{}) (mongoBSON.RawValue, error) {
 	if in == nil {
 		return mongoBSON.RawValue{}, nil
@@ -1237,6 +1223,20 @@ func (e *Event) LogsFrom(origin *Event) {
 	origin.logMu.Lock()
 	defer origin.logMu.Unlock()
 	e.StructuredLog = append(e.StructuredLog, origin.StructuredLog...)
+}
+
+func (e *Event) OwnerEmail() string {
+	switch e.Owner.Type {
+	case eventTypes.OwnerTypeUser:
+		return e.Owner.Name
+
+	case eventTypes.OwnerTypeToken:
+		return fmt.Sprintf("%s@%s", e.Owner.Name, authTypes.TsuruTokenEmailDomain)
+
+	default:
+		return ""
+	}
+
 }
 
 func checkIsExpired(ctx context.Context, collection *mongo.Collection, lock interface{}) bool {

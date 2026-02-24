@@ -97,12 +97,6 @@ func NewFakeAppWithPool(name, platform, pool string, units int) *appTypes.App {
 	return &app
 }
 
-type Cmd struct {
-	Cmd  string
-	Args []string
-	App  *appTypes.App
-}
-
 type failure struct {
 	method string
 	err    error
@@ -659,6 +653,7 @@ func (p *FakeProvisioner) DeleteVolume(ctx context.Context, volName, pool string
 func (p *FakeProvisioner) ValidateVolume(ctx context.Context, vol *volumeTypes.Volume) error {
 	return nil
 }
+
 func (p *FakeProvisioner) IsVolumeProvisioned(ctx context.Context, name, pool string) (bool, error) {
 	return false, nil
 }
@@ -707,7 +702,6 @@ func (p *FakeProvisioner) InternalAddresses(ctx context.Context, a *appTypes.App
 			Version:    "2",
 		},
 	}, nil
-
 }
 
 func (p *FakeProvisioner) ListLogs(ctx context.Context, obj *logTypes.LogabbleObject, args appTypes.ListLogArgs) ([]appTypes.Applog, error) {
@@ -810,7 +804,26 @@ func (p *AutoScaleProvisioner) SetAutoScale(ctx context.Context, app *appTypes.A
 	if p.autoscales == nil {
 		p.autoscales = make(map[string][]provTypes.AutoScaleSpec)
 	}
-	p.autoscales[app.Name] = append(p.autoscales[app.Name], spec)
+	// Update existing autoscale for the process if it exists, otherwise append
+	updated := false
+	for i, existing := range p.autoscales[app.Name] {
+		if existing.Process == spec.Process {
+			p.autoscales[app.Name][i] = spec
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		p.autoscales[app.Name] = append(p.autoscales[app.Name], spec)
+	}
+	return nil
+}
+
+func (p *AutoScaleProvisioner) SwapAutoScale(ctx context.Context, a *appTypes.App, versionStr string) error {
+	version, _ := strconv.Atoi(versionStr)
+	for i := range p.autoscales[a.Name] {
+		p.autoscales[a.Name][i].Version = version
+	}
 	return nil
 }
 

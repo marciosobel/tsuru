@@ -1053,6 +1053,52 @@ paths:
       - app
       security:
       - Bearer: []
+  /1.0/apps/{app}/log:
+    parameters:
+    - name: app
+      in: path
+      required: true
+      type: string
+      minLength: 1
+      description: App name.
+    get:
+      operationId: AppLog
+      description: Retrieve logs from an app
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: "App logs"
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: "#/definitions/AppLog"
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: App not found.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      parameters:
+      - name: lines
+        description: Number of log lines to retrieve.
+        in: query
+        type: string
+      - name: source
+        description: Filter logs by source.
+        in: query
+        type: string
+      - name: unit
+        description: Filter logs by unit.
+        in: query
+        type: string
+      tags:
+      - app
+      security:
+      - Bearer: []
   /1.0/apps/{app}/certificate:
     parameters:
     - name: app
@@ -2172,6 +2218,45 @@ paths:
       responses:
         "200":
           description: AutoScale removed
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: App not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+      - app
+      security:
+      - Bearer: []
+
+  /1.29/apps/{app}/units/autoscale/swap:
+    parameters:
+    - name: app
+      in: path
+      required: true
+      type: string
+      minLength: 1
+      description: App name.
+    post:
+      operationId: AutoScaleSwap
+      description: Swap autoscale to another version.
+      parameters:
+      - name: version
+        in: body
+        required: true
+        schema:
+          $ref: "#/definitions/SwapAutoScaleSpec"
+      consumes:
+      - application/json
+      responses:
+        "200":
+          description: AutoScale swapped
+        "400":
+          description: Invalid data
+          schema:
+            $ref: "#/definitions/ErrorMessage"
         "401":
           description: Unauthorized
           schema:
@@ -3911,6 +3996,92 @@ paths:
       security:
       - Bearer: []
 
+  /1.1/events:
+    get:
+      operationId: EventList
+      produces:
+      - application/json
+      parameters:
+      - name: target.type
+        in: query
+        type: string
+        description: Filter by target type
+      - name: target.value
+        in: query
+        type: string
+        description: Filter by target value
+      - name: kindType
+        in: query
+        type: string
+        description: Filter by kind type
+      - name: kindNames
+        in: query
+        type: array
+        items:
+          type: string
+        collectionFormat: multi
+        description: Filter by kind names
+      - name: ownerType
+        in: query
+        type: string
+        description: Filter by owner type
+      - name: ownerName
+        in: query
+        type: string
+        description: Filter by owner name
+      - name: since
+        in: query
+        type: string
+        format: date-time
+        description: Filter events since this date
+      - name: until
+        in: query
+        type: string
+        format: date-time
+        description: Filter events until this date
+      - name: running
+        in: query
+        type: boolean
+        description: Filter by running status
+      - name: errorOnly
+        in: query
+        type: boolean
+        description: Filter only events with errors
+      - name: limit
+        in: query
+        type: integer
+        description: Limit number of results
+      - name: skip
+        in: query
+        type: integer
+        description: Skip number of results
+      - name: sort
+        in: query
+        type: string
+        description: Sort order
+
+      responses:
+        "200":
+          description: Event list.
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: "#/definitions/Event"
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: Team token not found.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+
+      tags:
+      - event
+      security:
+      - Bearer: []
+
   /1.1/events/{eventid}:
     get:
       operationId: EventInfo
@@ -4718,6 +4889,13 @@ definitions:
                 type: integer
                 description: Minimum number of units to scale down
                 x-go-custom-type: "*int32"
+  SwapAutoScaleSpec:
+    description: Swap Units Auto Scale spec
+    type: object
+    properties:
+      version:
+        type: string
+    required: ["version"]
   AutoScaleSchedule:
     description: Auto Scale schedules struct
     type: object
@@ -5475,6 +5653,23 @@ definitions:
           $ref: "#/definitions/AutoScaleSpec"
       dashboardURL:
         type: string
+  AppLog:
+    description: App log.
+    type: object
+    properties:
+      date:
+        type: string
+        format: date-time
+      name:
+        type: string
+      source:
+        type: string
+      message:
+        type: string
+      unit:
+        type: string
+      type:
+        type: string
   UnitMetrics:
     type: object
     properties:
@@ -5767,18 +5962,21 @@ definitions:
         description: concurrency policy.
       container:
         type: object
-        properties:
-          image:
-            type: string
-          command:
-            type: array
-            items:
-              type: string
-          envs:
-            type: array
-            items:
-              type: object
-              $ref: "#/definitions/EnvVar"
+        $ref: "#/definitions/JobSpecContainer"
+  JobSpecContainer:
+    type: object
+    properties:
+      image:
+        type: string
+      command:
+        type: array
+        items:
+          type: string
+      envs:
+        type: array
+        items:
+          type: object
+          $ref: "#/definitions/EnvVar"
   AppCreateResponse:
     description: Newly created app information.
     type: object
@@ -6413,49 +6611,182 @@ definitions:
           type: string
       Blacklist:
         type: boolean
+  EventTarget:
+    description: Event target
+    type: object
+    properties:
+      Type:
+        type: string
+      Value:
+        type: string
+  EventExtraTarget:
+    description: Event extra target
+    type: object
+    properties:
+      Target:
+        $ref: "#/definitions/EventTarget"
+      Lock:
+        type: boolean
+  EventKind:
+    description: Event kind
+    type: object
+    properties:
+      Type:
+        type: string
+      Name:
+        type: string
+  EventOwner:
+    description: Event owner
+    type: object
+    properties:
+      Type:
+        type: string
+      Name:
+        type: string
+  EventLogEntry:
+    description: Event structured log entry
+    type: object
+    properties:
+      Date:
+        type: string
+        format: date-time
+      Message:
+        type: string
+  EventPermissionContext:
+    description: Permission context
+    type: object
+    properties:
+      CtxType:
+        type: string
+      Value:
+        type: string
+  EventAllowedPermission:
+    description: Allowed permission
+    type: object
+    properties:
+      Scheme:
+        type: string
+      Contexts:
+        type: array
+        items:
+          $ref: "#/definitions/EventPermissionContext"
+  EventCancelInfo:
+    description: Event cancellation information
+    type: object
+    properties:
+      Owner:
+        type: string
+      StartTime:
+        type: string
+        format: date-time
+      AckTime:
+        type: string
+        format: date-time
+      Reason:
+        type: string
+      Asked:
+        type: boolean
+      Canceled:
+        type: boolean
+  EventTrackedInstance:
+    description: Tracked instance information
+    type: object
+    properties:
+      Name:
+        type: string
+      Port:
+        type: string
+      TLSPort:
+        type: string
+      Addresses:
+        type: array
+        items:
+          type: string
+      LastUpdate:
+        type: string
+        format: date-time
+  EventStartCustomData:
+    description: Raw custom data (BSON encoded)
+    type: object
+    properties:
+      Kind:
+        type: number
+      Data:
+        type: string
+        format: byte
+  EventCustomData:
+    description: Parsed custom data
+    type: object
+    properties:
+      Start:
+        type: array
+        items:
+          type: object
+      End:
+        type: array
+        items:
+          type: object
+      Other:
+        type: array
+        items:
+          type: object
   Event:
     description: Tsuru event
     type: object
     properties:
       UniqueID:
         type: string
+      Lock:
+        $ref: "#/definitions/EventTarget"
       StartTime:
         type: string
         format: date-time
       EndTime:
         type: string
         format: date-time
+      ExpireAt:
+        type: string
+        format: date-time
       Target:
-        type: object
-        properties:
-          Type:
-            type: string
-          Value:
-            type: string
-      StartCustomData:
-        type: object
-        properties:
-          Kind:
-            type: number
-          Data:
-            type: string
-      EndCustomData:
-        type: object
-        properties:
-          Kind:
-            type: number
-          Data:
-            type: string
-      OtherCustomData:
-        type: object
-        properties:
-          Kind:
-            type: number
-          Data:
-            type: string
+        $ref: "#/definitions/EventTarget"
+      ExtraTargets:
+        type: array
+        items:
+          $ref: "#/definitions/EventExtraTarget"
+      Kind:
+        $ref: "#/definitions/EventKind"
+      Owner:
+        $ref: "#/definitions/EventOwner"
+      SourceIP:
+        type: string
+      LockUpdateTime:
+        type: string
+        format: date-time
       Error:
         type: string
       Log:
         type: string
+      StructuredLog:
+        type: array
+        items:
+          $ref: "#/definitions/EventLogEntry"
+      CancelInfo:
+        $ref: "#/definitions/EventCancelInfo"
+      Cancelable:
+        type: boolean
       Running:
         type: boolean
+      Allowed:
+        $ref: "#/definitions/EventAllowedPermission"
+      AllowedCancel:
+        $ref: "#/definitions/EventAllowedPermission"
+      Instance:
+        $ref: "#/definitions/EventTrackedInstance"
+      StartCustomData:
+        $ref: "#/definitions/EventStartCustomData"
+      EndCustomData:
+        $ref: "#/definitions/EventStartCustomData"
+      OtherCustomData:
+        $ref: "#/definitions/EventStartCustomData"
+      CustomData:
+        $ref: "#/definitions/EventCustomData"
