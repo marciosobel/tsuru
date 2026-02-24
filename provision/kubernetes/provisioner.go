@@ -1734,19 +1734,27 @@ func (p *kubernetesProvisioner) UploadFile(ctx context.Context, app *appTypes.Ap
 	if err != nil {
 		return err
 	}
+	namespace, err := client.AppNamespace(ctx, app)
+	if err != nil {
+		return err
+	}
 
 	pathDir := path.Dir(filepath)
-
 	untarCmd := []string{"tar", "xvf", "-", "-C", pathDir}
-	namespace := client.Namespace()
-	request := client.CoreV1().RESTClient().Post().Resource("pods").Name(unit).Namespace(namespace).SubResource("exec").VersionedParams(&apiv1.PodExecOptions{
-		Command:   untarCmd,
-		Container: "",
-		Stdin:     true,
-		Stdout:    false,
-		Stderr:    true,
-		TTY:       false,
-	}, metav1.ParameterCodec)
+
+	request := client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(unit).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&apiv1.PodExecOptions{
+			Command:   untarCmd,
+			Container: "",
+			Stdin:     true,
+			Stdout:    false,
+			Stderr:    true,
+			TTY:       false,
+		}, metav1.ParameterCodec)
 
 	exec, err := remotecommand.NewSPDYExecutor(client.restConfig, "POST", request.URL())
 	if err != nil {
